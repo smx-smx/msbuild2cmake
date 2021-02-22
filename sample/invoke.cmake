@@ -1,0 +1,18 @@
+cmake_minimum_required ( VERSION 3.10 FATAL_ERROR )
+list(INSERT CMAKE_MODULE_PATH 0 "${CMAKE_CURRENT_LIST_DIR}/../cmake")
+
+include(msbuild2cmake)
+
+#
+# invoke CMake to run CMakeLists.txt with the specified TARGET
+#
+invoke_cmake(
+	BUILD_DIR ${CMAKE_BINARY_DIR}/build/${TARGET}
+	DIRECTORY ${MSBUILD_SLN_DIR}
+	TARGET ${TARGET}
+	PASS_VARIABLES
+		CMAKE_BUILD_TYPE
+	EXTRA_ARGUMENTS
+		-DMSBUILD_PLATFORM=${MSBUILD_ACTUAL_PLATFORM}
+		-DTARGET=${TARGET}
+)

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <Configurations>Debug;Release</Configurations>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <CMakeFlags Include="-DIS_MSYS=FALSE" />
+    <CMakeFlags Include="-DCMAKE_BUILD_TYPE=&quot;$(Configuration)&quot;" />
+    <CMakeFlags Include="-DMSBUILD_PLATFORM=&quot;$(Platform)&quot;" />
+    <CMakeFlags Include="-DMSBUILD_SLN_DIR=&quot;$(ProjectDir)../&quot;" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <!-- this is needed to have a consistent and normalized path (or it will not work on Unix) -->
+    <InvokeCMake>$([System.IO.Path]::Combine($(ProjectDir), ..\invoke.cmake))</InvokeCMake>
+    <!-- build the arguments string by joining <CMakeFlags> items by space -->
+    <CMakeArguments>@(CMakeFlags -> '%(Identity)', ' ')</CMakeArguments>
+  </PropertyGroup>
+
+  <Target Name="sample_cmake_target">
+    <Exec Command="cmake $(CMakeArguments) -DTARGET=sample_cmake_target -P $(InvokeCMake)" />
+  </Target>
+</Project>
