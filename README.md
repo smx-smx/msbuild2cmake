@@ -1,6 +1,11 @@
 # msbuild2cmake
 Template to use CMake in complex MSBuild flows without writing custom MSBuild tasks
 
+It can be used to effectively work around MSBuild limitations or weaknesses, like weak tracking of files generated dynamically at build time.
+It can also be used to express dependencies between MSBuild and external projects, or vice versa.
+
+Part of this module is a modified fork of https://github.com/microsoft/GraphEngine/blob/ec3588389a5f5edc034d91a020d6f19c52381d2b/cmake/FindDotnet.cmake
+
 ## Architecture
 
 ### BuildTargets.csproj
@@ -108,7 +113,7 @@ What if we're building a MSBuild project, and we have a pre-build dependency on 
 ```
 
 Of course, `foo` must be 
-- defined `BuildTargets.csproj`
+- defined in `BuildTargets.csproj`
 - handled by checking `TARGET` in CMakeLists.txt
 - must be a target created by the invocation of `add_custom_target`
 
