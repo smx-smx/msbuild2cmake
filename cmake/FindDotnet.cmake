@@ -75,7 +75,6 @@
 #                 [SOURCES additional_file_dependencies... ])
 # 
 # For all the above functions, `RELEASE|DEBUG` overrides `CONFIG`, `X86|X64|ANYCPU` overrides PLATFORM.
-# For Unix systems, the target framework defaults to `netstandard2.1`, unless `NETCOREAPP` is specified.
 # For Windows, the project is built as-is, allowing multi-targeting.
 #
 #
@@ -122,6 +121,24 @@ ENDIF()
 SET(NUGET_CACHE_PATH "~/.nuget/packages")
 FIND_PROGRAM(DOTNET_EXE dotnet)
 SET(DOTNET_MODULE_DIR ${CMAKE_CURRENT_LIST_DIR})
+
+if(CYGWIN)
+    find_program(CYGPATH_CYGWIN cygpath REQUIRED)
+endif()
+
+function(cygpath_windows path result_var)
+    if(CYGWIN)
+        execute_process(
+            COMMAND ${CYGPATH_CYGWIN} -w "${path}"
+            OUTPUT_VARIABLE _out
+        )
+        string(STRIP "${_out}" _out)
+        string(REPLACE "\\" "/" _out "${_out}")
+        set(${result_var} "${_out}" PARENT_SCOPE)
+    else()
+        set(${result_var} "${path}" PARENT_SCOPE)
+    endif()
+endfunction()
 
 IF(NOT DOTNET_EXE)
     SET(DOTNET_FOUND FALSE)
@@ -170,9 +187,9 @@ FUNCTION(DOTNET_GET_DEPS _DN_PROJECT arguments)
         # prefix
         _DN 
         # options (flags)
-        "RELEASE;DEBUG;X86;X64;ANYCPU;NETCOREAPP;NO_RESTORE;NO_CLEAN" 
+        "RELEASE;DEBUG;X86;X64;ANYCPU;NETCOREAPP;NO_RESTORE;NO_CLEAN;PUBLISH;SELF_CONTAINED" 
         # oneValueArgs
-        "CONFIG;PLATFORM;VERSION;OUTPUT_PATH;TARGET_NAME;TARGETFRAMEWORK"
+        "CONFIG;PLATFORM;FRAMEWORK;VERSION;OUTPUT_PATH;TARGET_NAME;RID"
         # multiValueArgs
         "PACKAGE;DEPENDS;ARGUMENTS;PACK_ARGUMENTS;OUTPUT;SOURCES;CUSTOM_BUILDPROPS"
         # the input arguments
@@ -256,6 +273,7 @@ FUNCTION(DOTNET_GET_DEPS _DN_PROJECT arguments)
     SET(DOTNET_CONFIG   ${_DN_CONFIG}   PARENT_SCOPE)
     SET(DOTNET_PLATFORM ${_DN_PLATFORM} PARENT_SCOPE)
     SET(DOTNET_DEPENDS  ${_DN_DEPENDS}  PARENT_SCOPE)
+    set(DOTNET_FRAMEWORK ${_DN_FRAMEWORK} PARENT_SCOPE)
     SET(DOTNET_PROJNAME ${_DN_projname_noext} PARENT_SCOPE)
     set(DOTNET_TARGETNAME ${_DN_TARGET_NAME} PARENT_SCOPE)
     SET(DOTNET_PROJPATH ${_DN_abs_proj} PARENT_SCOPE)
@@ -264,36 +282,44 @@ FUNCTION(DOTNET_GET_DEPS _DN_PROJECT arguments)
     SET(DOTNET_RUN_OUTPUT ${_DN_OUTPUT} PARENT_SCOPE)
     SET(DOTNET_PACKAGE_VERSION ${_DN_VERSION} PARENT_SCOPE)
     SET(DOTNET_OUTPUT_PATH ${_DN_OUTPUT_PATH} PARENT_SCOPE)
+    set(DOTNET_PUBLISH ${_DN_PUBLISH} PARENT_SCOPE)
     SET(DOTNET_deps ${_DN_deps} PARENT_SCOPE)
+
+    seT(_DN_PUBLISH_OPTIONS "")
+    if(_DN_PUBLISH)
+        if(NOT "${_DN_RID}" STREQUAL "")
+            list(APPEND _DN_PUBLISH_OPTIONS -r ${_DN_RID})
+        endif()
+        if(_DN_SELF_CONTAINED)
+            list(APPEND _DN_PUBLISH_OPTIONS --self-contained)
+        else()
+            list(APPEND _DN_PUBLISH_OPTIONS --no-self-contained)
+        endif()
+    endif()
 
     IF(_DN_PLATFORM)
         SET(_DN_PLATFORM_PROP "/p:Platform=${_DN_PLATFORM}")
     ENDIF()
 
-    IF(NOT _DN_TARGETFRAMEWORK)
-        IF(_DN_NETCOREAPP)
-            SET(_DN_TARGETFRAMEWORK netcoreapp3.1)
-        ELSEIF(UNIX)
-            # Unix builds default to netstandard2.1
-            SET(_DN_TARGETFRAMEWORK netstandard2.1)
-        ENDIF()
+    if(_DN_FRAMEWORK)
+        SET(_DN_BUILD_OPTIONS -f ${_DN_FRAMEWORK})
+        SET(_DN_PACK_OPTIONS /p:TargetFrameworks=${_DN_FRAMEWORK})
+        list(APPEND _DN_PUBLISH_OPTIONS -f ${_DN_FRAMEWORK})
     ENDIF()
 
-    if(_DN_TARGETFRAMEWORK)
-        SET(_DN_BUILD_OPTIONS -f ${_DN_TARGETFRAMEWORK})
-        SET(_DN_PACK_OPTIONS /p:TargetFrameworks=${_DN_TARGETFRAMEWORK})
-    endif()
-
     SET(_DN_IMPORT_PROP ${CMAKE_CURRENT_BINARY_DIR}/${_DN_projname}.imports.props)
+    
+    cygpath_windows("${_DN_OUTPUT_PATH}" _DN_OUTPUT_PATH_NATIVE)
     CONFIGURE_FILE(${DOTNET_MODULE_DIR}/DotnetImports.props.in ${_DN_IMPORT_PROP})
     
-    SET(_DN_IMPORT_ARGS "/p:DirectoryBuildPropsPath=${_DN_IMPORT_PROP}")
+    cygpath_windows("${_DN_IMPORT_PROP}" _DN_IMPORT_PROP_NATIVE)
+    SET(_DN_IMPORT_ARGS "/p:DirectoryBuildPropsPath=${_DN_IMPORT_PROP_NATIVE}")
 
-    SET(DOTNET_IMPORT_PROPERTIES ${_DN_IMPORT_ARGS} PARENT_SCOPE)
+    SET(DOTNET_IMPORT_PROPERTIES ${_DN_PLATFORM_PROP} ${_DN_IMPORT_ARGS} PARENT_SCOPE)
     SET(DOTNET_BUILD_PROPERTIES ${_DN_PLATFORM_PROP} ${_DN_IMPORT_ARGS} PARENT_SCOPE)
     SET(DOTNET_BUILD_OPTIONS ${_DN_BUILD_OPTIONS} PARENT_SCOPE)
     SET(DOTNET_PACK_OPTIONS --include-symbols ${_DN_PACK_OPTIONS} ${_DN_PACK_ARGUMENTS} PARENT_SCOPE)
-
+    set(DOTNET_PUBLISH_OPTIONS ${_DN_PUBLISH_OPTIONS} PARENT_SCOPE)
 ENDFUNCTION()
 
 MACRO(ADD_DOTNET_DEPENDENCY_TARGETS tgt)
@@ -326,6 +352,7 @@ MACRO(ADD_DOTNET_DEPENDENCY_TARGETS tgt)
 ENDMACRO()
 
 MACRO(DOTNET_BUILD_COMMANDS)
+    cygpath_windows("${DOTNET_PROJPATH}" _dotnet_projpath_native)
     IF(${DOTNET_IS_MSBUILD})
         SET(build_dotnet_cmds 
             COMMAND ${CMAKE_COMMAND} -E echo "======= Building msbuild project ${DOTNET_PROJNAME} [${DOTNET_CONFIG} ${DOTNET_PLATFORM}]"
@@ -333,17 +360,17 @@ MACRO(DOTNET_BUILD_COMMANDS)
 
         if(NOT DOTNET_NO_RESTORE)
             list(APPEND build_dotnet_cmds
-                COMMAND ${NUGET_EXE} restore -Force ${DOTNET_PROJPATH}
+                COMMAND ${NUGET_EXE} restore -Force ${_dotnet_projpath_native}
             )
         endif()
         if(NOT DOTNET_NO_CLEAN)
             list(APPEND build_dotnet_cmds
-                COMMAND ${DOTNET_EXE} msbuild ${DOTNET_PROJPATH} /t:Clean ${DOTNET_BUILD_PROPERTIES} /p:Configuration="${DOTNET_CONFIG}"
+                COMMAND ${DOTNET_EXE} msbuild ${_dotnet_projpath_native} /t:Clean ${DOTNET_BUILD_PROPERTIES} /p:Configuration="${DOTNET_CONFIG}"
             )
         endif()
 
         list(APPEND build_dotnet_cmds
-            COMMAND ${DOTNET_EXE} msbuild ${DOTNET_PROJPATH} /t:Build ${DOTNET_BUILD_PROPERTIES} /p:Configuration="${DOTNET_CONFIG}" ${DOTNET_ARGUMENTS}
+            COMMAND ${DOTNET_EXE} msbuild ${_dotnet_projpath_native} /t:Build ${DOTNET_BUILD_PROPERTIES} /p:Configuration="${DOTNET_CONFIG}" ${DOTNET_ARGUMENTS}
         )
 
 
@@ -356,19 +383,19 @@ MACRO(DOTNET_BUILD_COMMANDS)
         set(restore_arg "")
         if(NOT DOTNET_NO_RESTORE)
             list(APPEND build_dotnet_cmds
-                COMMAND ${DOTNET_EXE} restore ${DOTNET_PROJPATH} ${DOTNET_IMPORT_PROPERTIES}
+                COMMAND ${DOTNET_EXE} restore ${_dotnet_projpath_native} ${DOTNET_IMPORT_PROPERTIES}
             )
             set(restore_arg "--no-restore")
         endif()
 
         if(NOT DOTNET_NO_CLEAN)
             list(APPEND build_dotnet_cmds
-                COMMAND ${DOTNET_EXE} clean ${DOTNET_PROJPATH} ${DOTNET_BUILD_PROPERTIES}
+                COMMAND ${DOTNET_EXE} clean ${_dotnet_projpath_native} ${DOTNET_BUILD_PROPERTIES}
             )
         endif()
 
         list(APPEND build_dotnet_cmds
-            COMMAND ${DOTNET_EXE} build ${restore_arg} ${DOTNET_PROJPATH} -c ${DOTNET_CONFIG} ${DOTNET_BUILD_PROPERTIES} ${DOTNET_BUILD_OPTIONS} ${DOTNET_ARGUMENTS}
+            COMMAND ${DOTNET_EXE} build ${restore_arg} ${_dotnet_projpath_native} -c ${DOTNET_CONFIG} ${DOTNET_BUILD_PROPERTIES} ${DOTNET_BUILD_OPTIONS} ${DOTNET_ARGUMENTS}
         )
 
         SET(build_dotnet_type "dotnet")
@@ -384,13 +411,34 @@ MACRO(DOTNET_BUILD_COMMANDS)
             LIST(APPEND build_dotnet_cmds COMMAND ${CMAKE_COMMAND} -E remove ${DOTNET_OUTPUT_PATH}/${pkg}.${DOTNET_PACKAGE_VERSION}.nupkg)
             LIST(APPEND build_dotnet_cmds COMMAND ${CMAKE_COMMAND} -E remove ${DOTNET_OUTPUT_PATH}/${pkg}.${DOTNET_PACKAGE_VERSION}.symbols.nupkg)
         ENDFOREACH()
-        LIST(APPEND build_dotnet_cmds COMMAND ${DOTNET_EXE} pack --no-build --no-restore ${DOTNET_PROJPATH} -c ${DOTNET_CONFIG} ${DOTNET_BUILD_PROPERTIES} ${DOTNET_PACK_OPTIONS})
+        LIST(APPEND build_dotnet_cmds COMMAND
+            ${DOTNET_EXE} pack
+            --no-build --no-restore
+            ${_dotnet_projpath_native}
+            -c ${DOTNET_CONFIG}
+            ${DOTNET_BUILD_PROPERTIES}
+            ${DOTNET_PACK_OPTIONS}
+        )
         LIST(APPEND build_dotnet_cmds COMMAND ${CMAKE_COMMAND} -E copy ${DOTNET_OUTPUTS} ${CMAKE_BINARY_DIR})
     ELSE()
         MESSAGE("-- Adding ${build_dotnet_type} project ${DOTNET_PROJPATH} (no nupkg)")
     ENDIF()
+    if(DOTNET_PUBLISH)
+        LIST(APPEND build_dotnet_cmds COMMAND
+            ${DOTNET_EXE} publish
+            ${_dotnet_projpath_native}
+            -c ${DOTNET_CONFIG}
+            ${DOTNET_BUILD_PROPERTIES}
+            ${DOTNET_PUBLISH_OPTIONS}
+        )
+    endif()
     LIST(APPEND DOTNET_OUTPUTS ${CMAKE_CURRENT_BINARY_DIR}/${DOTNET_PROJNAME}.buildtimestamp)
     LIST(APPEND build_dotnet_cmds COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/${DOTNET_PROJNAME}.buildtimestamp)
+
+    #foreach(cmd IN LISTS build_dotnet_cmds)
+    #    message(STATUS "-- ${cmd}")
+    #endforeach()
+    #message(FATAL_ERROR "${build_dotnet_cmds}")
 
     ADD_CUSTOM_COMMAND(
         OUTPUT ${DOTNET_OUTPUTS}
@@ -457,7 +505,7 @@ FUNCTION(RUN_DOTNET DOTNET_PROJECT)
         DEPENDS ${DOTNET_deps}
         ${dotnet_run_cmds}
         # XXX tfm
-        COMMAND ${DOTNET_EXE} ${DOTNET_OUTPUT_PATH}/netcoreapp3.1/${DOTNET_PROJNAME}.dll ${DOTNET_ARGUMENTS}
+        COMMAND ${DOTNET_EXE} ${DOTNET_OUTPUT_PATH}/${DOTNET_FRAMEWORK}/${DOTNET_PROJNAME}.dll ${DOTNET_ARGUMENTS}
         #COMMAND ${CMAKE_COMMAND} -E echo ${aio_run_command}
         #COMMAND ${aio_run_command}
         COMMAND ${CMAKE_COMMAND} -E touch ${CMAKE_CURRENT_BINARY_DIR}/${DOTNET_TARGETNAME}.runtimestamp
@@ -471,10 +519,8 @@ ENDFUNCTION()
 FUNCTION(TEST_DOTNET DOTNET_PROJECT)
     DOTNET_GET_DEPS(${DOTNET_PROJECT} "${ARGN}")
     MESSAGE("-- Adding dotnet test project ${DOTNET_PROJECT}")
-    IF(WIN32)
-        SET(test_framework_args "")
-    ELSE()
-        SET(test_framework_args -f netcoreapp3.1)
+    IF(DOTNET_FRAMEWORK)
+        SET(test_framework_args -f ${DOTNET_FRAMEWORK})
     ENDIF()
 
     ADD_TEST(NAME              ${DOTNET_PROJNAME}
